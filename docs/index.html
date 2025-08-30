@@ -36,6 +36,25 @@
       margin: 0 0 8px;
       font-size: 20px;
     }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0 12px;
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn.primary { border-color: #0b79d0; color: #0b79d0; }
+    .btn.danger { border-color: #d00b0b; color: #d00b0b; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .subtle { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
     .section-title {
       margin: 18px 0 8px;
@@ -105,6 +124,15 @@
   <div class="container">
     <h1>持ち物管理アプリ用リスト</h1>
     <div class="subtle">数値を入力すると自動で合計が計算されます。</div>
+
+    <div class="toolbar">
+      <button class="btn primary" id="exportJsonBtn">JSONエクスポート</button>
+      <button class="btn" id="exportCsvBtn">CSVエクスポート</button>
+      <label class="btn" for="importJsonInput">JSONインポート</label>
+      <input type="file" id="importJsonInput" accept="application/json" style="display:none" />
+      <button class="btn" id="shareLinkBtn">共有リンク生成</button>
+      <button class="btn danger" id="clearBtn">保存データをクリア</button>
+    </div>
 
     <div class="section-title">衣類</div>
     <div class="row">
@@ -276,18 +304,27 @@
     <div class="divider">ーーーーーーーーーーーーーー</div>
 
     <div class="section-title">【持ち物の傾向・価値観リスト】</div>
-    <textarea placeholder="例：少数精鋭、黒系が多い、用途が重複しないように選ぶ など"></textarea>
+    <textarea data-key="traits" placeholder="例：少数精鋭、黒系が多い、用途が重複しないように選ぶ など"></textarea>
 
     <div class="section-title">【失敗したモノの傾向リスト】</div>
-    <textarea placeholder="例：サイズが合っていない、色が派手すぎた、似た用途の重複購入 など"></textarea>
+    <textarea data-key="failures" placeholder="例：サイズが合っていない、色が派手すぎた、似た用途の重複購入 など"></textarea>
   </div>
 
   <script>
     (function () {
+      const STORAGE_KEY = 'packingListState_v1';
       const numberInputs = Array.from(document.querySelectorAll('input[type="number"]'));
+      const textareas = Array.from(document.querySelectorAll('textarea'));
+      const allInputs = [...numberInputs, ...textareas];
       const clothesInputs = numberInputs.filter(el => el.dataset.group === 'clothes');
       const clothesTotalEl = document.getElementById('clothesTotal');
       const grandTotalEl = document.getElementById('grandTotal');
+
+      const exportJsonBtn = document.getElementById('exportJsonBtn');
+      const exportCsvBtn = document.getElementById('exportCsvBtn');
+      const importJsonInput = document.getElementById('importJsonInput');
+      const shareLinkBtn = document.getElementById('shareLinkBtn');
+      const clearBtn = document.getElementById('clearBtn');
 
       function toInt(val) {
         const n = parseInt(val, 10);
@@ -297,18 +334,166 @@
       function updateTotals() {
         const clothesTotal = clothesInputs.reduce((sum, el) => sum + toInt(el.value), 0);
         const grandTotal = numberInputs.reduce((sum, el) => sum + toInt(el.value), 0);
-
         clothesTotalEl.textContent = clothesTotal;
         grandTotalEl.textContent = grandTotal;
       }
 
-      numberInputs.forEach(el => {
-        el.addEventListener('input', updateTotals, { passive: true });
-        el.addEventListener('change', updateTotals, { passive: true });
+      function getState() {
+        const state = {};
+        numberInputs.forEach(el => { state[el.dataset.key] = toInt(el.value); });
+        textareas.forEach(el => { state[el.dataset.key] = String(el.value || ''); });
+        return state;
+      }
+
+      function setState(state) {
+        numberInputs.forEach(el => {
+          const v = state?.[el.dataset.key];
+          if (typeof v === 'number' || typeof v === 'string') el.value = v;
+        });
+        textareas.forEach(el => {
+          const v = state?.[el.dataset.key];
+          if (typeof v === 'string') el.value = v;
+        });
+        updateTotals();
+      }
+
+      function save() {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(getState())); } catch (e) {}
+      }
+
+      function restoreFromLocalStorage() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (raw) setState(JSON.parse(raw));
+        } catch (e) {}
+      }
+
+      function download(filename, content, type='application/octet-stream') {
+        const blob = new Blob([content], { type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function exportJSON() {
+        const state = getState();
+        const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+        download(`packing-list-${ts}.json`, JSON.stringify(state, null, 2), 'application/json');
+      }
+
+      function rowsToCSV() {
+        const rows = Array.from(document.querySelectorAll('.row'));
+        const header = ['カテゴリ', '数量', '単位'];
+        const lines = [header.join(',')];
+        rows.forEach(r => {
+          const label = (r.querySelector('.label')?.textContent || '').replace(/[\s\u3000]/g,'').replace(/[【】]/g,'');
+          const unit = (r.querySelector('.unit')?.textContent || '').trim();
+          const input = r.querySelector('input[type="number"]');
+          const qty = input ? toInt(input.value) : 0;
+          const esc = (s) => '"' + String(s).replace(/"/g,'""') + '"';
+          lines.push([esc(label), qty, esc(unit)].join(','));
+        });
+        // 追記: テキストエリアも最後に出力
+        const traits = textareas.find(t=>t.dataset.key==='traits')?.value || '';
+        const failures = textareas.find(t=>t.dataset.key==='failures')?.value || '';
+        lines.push('');
+        lines.push('"持ち物の傾向・価値観リスト"');
+        lines.push('"' + traits.replace(/"/g,'""') + '"');
+        lines.push('');
+        lines.push('"失敗したモノの傾向リスト"');
+        lines.push('"' + failures.replace(/"/g,'""') + '"');
+        return lines.join('\n');
+      }
+
+      function exportCSV() {
+        const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+        download(`packing-list-${ts}.csv`, rowsToCSV(), 'text/csv;charset=utf-8');
+      }
+
+      function importJSONFile(file) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const obj = JSON.parse(String(reader.result || '{}'));
+            setState(obj);
+            save();
+            alert('インポートしました');
+          } catch (e) {
+            alert('JSONの読み込みに失敗しました');
+          }
+        };
+        reader.readAsText(file);
+      }
+
+      function clearStorage() {
+        localStorage.removeItem(STORAGE_KEY);
+        // 値をゼロ/空に戻す
+        numberInputs.forEach(el => { el.value = 0; });
+        textareas.forEach(el => { el.value = ''; });
+        updateTotals();
+      }
+
+      function encodeStateToHash(state) {
+        try {
+          const json = JSON.stringify(state);
+          const b64 = btoa(unescape(encodeURIComponent(json)));
+          return '#data=' + b64;
+        } catch (e) { return ''; }
+      }
+
+      function decodeStateFromHash(hash) {
+        try {
+          if (!hash.startsWith('#data=')) return null;
+          const b64 = hash.slice(6);
+          const json = decodeURIComponent(escape(atob(b64)));
+          return JSON.parse(json);
+        } catch (e) { return null; }
+      }
+
+      // イベント: 入力で合計更新 + 自動保存（軽いデバウンス）
+      let t = null;
+      function onAnyChange() {
+        updateTotals();
+        if (t) clearTimeout(t);
+        t = setTimeout(save, 150);
+      }
+      allInputs.forEach(el => {
+        el.addEventListener('input', onAnyChange, { passive: true });
+        el.addEventListener('change', onAnyChange, { passive: true });
       });
 
-      // 初期表示
-      updateTotals();
+      // ボタン動作
+      exportJsonBtn.addEventListener('click', exportJSON);
+      exportCsvBtn.addEventListener('click', exportCSV);
+      importJsonInput.addEventListener('change', (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (f) importJSONFile(f);
+        e.target.value = '';
+      });
+      shareLinkBtn.addEventListener('click', () => {
+        const hash = encodeStateToHash(getState());
+        if (!hash) return alert('リンク生成に失敗しました');
+        const url = location.origin + location.pathname + hash;
+        navigator.clipboard?.writeText(url).then(() => {
+          alert('共有リンクをクリップボードにコピーしました');
+        }).catch(() => {
+          prompt('以下のURLをコピーしてください', url);
+        });
+      });
+      clearBtn.addEventListener('click', () => {
+        if (confirm('保存データを削除して初期化しますか？')) clearStorage();
+      });
+
+      // 初期表示: URLハッシュ優先で復元、なければLocalStorageから復元
+      const fromHash = decodeStateFromHash(location.hash || '');
+      if (fromHash) {
+        setState(fromHash);
+        save();
+      } else {
+        restoreFromLocalStorage();
+        updateTotals();
+      }
     })();
   </script>
 </body>
