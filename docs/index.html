@@ -36,6 +36,25 @@
       margin: 0 0 8px;
       font-size: 20px;
     }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field label { font-size: 13px; color: var(--muted); }
+    input[type="text"] {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      background: #fff;
+    }
     .toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -132,6 +151,32 @@
       <input type="file" id="importJsonInput" accept="application/json" style="display:none" />
       <button class="btn" id="shareLinkBtn">共有リンク生成</button>
       <button class="btn danger" id="clearBtn">保存データをクリア</button>
+    </div>
+
+    <div class="section-title">提出情報</div>
+    <div class="grid-2" style="margin-bottom:10px;">
+      <div class="field">
+        <label for="studentName">氏名</label>
+        <input type="text" id="studentName" data-key="studentName" placeholder="例：山田 太郎" />
+      </div>
+      <div class="field">
+        <label for="studentId">受講生ID</label>
+        <input type="text" id="studentId" data-key="studentId" placeholder="例：A-001" />
+      </div>
+    </div>
+    <div class="grid-2" style="margin-bottom:10px;">
+      <div class="field">
+        <label for="studentClass">クラス</label>
+        <input type="text" id="studentClass" data-key="studentClass" placeholder="例：第5期 平日クラス" />
+      </div>
+      <div class="field">
+        <label for="submitEndpoint">提出先URL（管理者が配布/GASのWebアプリURL）</label>
+        <input type="text" id="submitEndpoint" data-key="submitEndpoint" placeholder="https://script.google.com/.../exec" />
+      </div>
+    </div>
+    <div class="toolbar" style="justify-content:flex-end;">
+      <button class="btn primary" id="submitBtn">提出（送信）</button>
+      <span id="submitStatus" class="subtle" aria-live="polite"></span>
     </div>
 
     <div class="section-title">衣類</div>
@@ -312,10 +357,11 @@
 
   <script>
     (function () {
-      const STORAGE_KEY = 'packingListState_v1';
+      const STORAGE_KEY = 'packingListState_v2';
       const numberInputs = Array.from(document.querySelectorAll('input[type="number"]'));
       const textareas = Array.from(document.querySelectorAll('textarea'));
-      const allInputs = [...numberInputs, ...textareas];
+      const textInputs = Array.from(document.querySelectorAll('input[type="text"]'));
+      const allInputs = [...numberInputs, ...textareas, ...textInputs];
       const clothesInputs = numberInputs.filter(el => el.dataset.group === 'clothes');
       const clothesTotalEl = document.getElementById('clothesTotal');
       const grandTotalEl = document.getElementById('grandTotal');
@@ -325,6 +371,8 @@
       const importJsonInput = document.getElementById('importJsonInput');
       const shareLinkBtn = document.getElementById('shareLinkBtn');
       const clearBtn = document.getElementById('clearBtn');
+      const submitBtn = document.getElementById('submitBtn');
+      const submitStatus = document.getElementById('submitStatus');
 
       function toInt(val) {
         const n = parseInt(val, 10);
@@ -342,6 +390,7 @@
         const state = {};
         numberInputs.forEach(el => { state[el.dataset.key] = toInt(el.value); });
         textareas.forEach(el => { state[el.dataset.key] = String(el.value || ''); });
+        textInputs.forEach(el => { state[el.dataset.key] = String(el.value || ''); });
         return state;
       }
 
@@ -353,6 +402,10 @@
         textareas.forEach(el => {
           const v = state?.[el.dataset.key];
           if (typeof v === 'string') el.value = v;
+        });
+        textInputs.forEach(el => {
+          const v = state?.[el.dataset.key];
+          if (typeof v === 'string' || typeof v === 'number') el.value = v;
         });
         updateTotals();
       }
@@ -484,6 +537,70 @@
       clearBtn.addEventListener('click', () => {
         if (confirm('保存データを削除して初期化しますか？')) clearStorage();
       });
+
+      function collectForSubmit() {
+        const state = getState();
+        // すべての行（カテゴリ）を詳細として集約
+        const rows = Array.from(document.querySelectorAll('.row')).map(r => {
+          const label = (r.querySelector('.label')?.textContent || '').trim();
+          const unit = (r.querySelector('.unit')?.textContent || '').trim();
+          const input = r.querySelector('input[type="number"]');
+          const qty = input ? toInt(input.value) : 0;
+          return { label, unit, qty, key: input?.dataset.key || null };
+        });
+        const payload = {
+          meta: {
+            timestamp: new Date().toISOString(),
+            userAgent: navigator.userAgent,
+            url: location.href
+          },
+            // 識別情報
+          identity: {
+            name: state.studentName || '',
+            studentId: state.studentId || '',
+            className: state.studentClass || ''
+          },
+          totals: {
+            clothes: Number(document.getElementById('clothesTotal')?.textContent || 0),
+            grand: Number(document.getElementById('grandTotal')?.textContent || 0)
+          },
+          notes: {
+            traits: state.traits || '',
+            failures: state.failures || ''
+          },
+          items: rows
+        };
+        return { payload, endpoint: state.submitEndpoint || '' };
+      }
+
+      async function submitData() {
+        submitStatus.textContent = '';
+        const { payload, endpoint } = collectForSubmit();
+        if (!endpoint) { submitStatus.textContent = '提出先URLを入力してください'; return; }
+        if (!payload.identity.name && !payload.identity.studentId) {
+          submitStatus.textContent = '氏名または受講生IDを入力してください'; return;
+        }
+        try {
+          submitBtn.disabled = true;
+          submitStatus.textContent = '送信中...';
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            mode: 'cors',
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          // 期待応答: { ok: true }
+          let msg = '送信しました';
+          try { const j = await res.json(); if (j && j.message) msg = j.message; } catch (e) {}
+          submitStatus.textContent = msg;
+        } catch (e) {
+          submitStatus.textContent = '送信に失敗しました。提出先URLやCORS設定を確認してください';
+        } finally {
+          submitBtn.disabled = false;
+        }
+      }
+      submitBtn.addEventListener('click', submitData);
 
       // 初期表示: URLハッシュ優先で復元、なければLocalStorageから復元
       const fromHash = decodeStateFromHash(location.hash || '');
