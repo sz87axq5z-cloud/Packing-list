@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>管理ビューア（Packing List）</title>
+  <style>
+    :root {
+      --bg: #fafafa; --card:#fff; --text:#222; --muted:#666; --border:#e6e6e6; --accent:#0b79d0;
+    }
+    *{ box-sizing:border-box }
+    body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans JP","Hiragino Sans","Yu Gothic",Meiryo,sans-serif; background:var(--bg); color:var(--text);}
+    .wrap{ max-width:1100px; margin:0 auto; padding:20px; }
+    h1{ font-size:20px; margin:0 0 10px }
+    .card{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin:12px 0; }
+    .grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .field{ display:flex; flex-direction:column; gap:6px; }
+    .field label{ color:var(--muted); font-size:12px }
+    input[type="text"], textarea{ width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:14px; background:#fff }
+    textarea{ min-height:120px; resize:vertical }
+    .toolbar{ display:flex; flex-wrap:wrap; gap:8px; }
+    .btn{ appearance:none; border:1px solid var(--border); background:#fff; color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px; cursor:pointer }
+    .btn.primary{ border-color:var(--accent); color:var(--accent) }
+    .btn.danger{ border-color:#d00b0b; color:#d00b0b }
+    .muted{ color:var(--muted); font-size:12px }
+    table{ width:100%; border-collapse:collapse; }
+    th, td{ border-top:1px solid var(--border); padding:8px; text-align:left; vertical-align:top; }
+    th{ background:#f5f8fb }
+    .pill{ display:inline-block; border:1px solid var(--border); border-radius:999px; padding:2px 8px; font-size:12px; color:var(--muted) }
+    .flex{ display:flex; gap:8px; align-items:center }
+    .right{ text-align:right }
+    .mb8{ margin-bottom:8px }
+    .mb12{ margin-bottom:12px }
+    .mb4{ margin-bottom:4px }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>管理ビューア（Packing List）</h1>
+    <div class="muted mb12">共有リンク（#data=...）や JSON を貼付／読込して、提出内容を一覧表示・CSV出力します。将来的な認証API連携に備えた設定欄あり。</div>
+
+    <div class="card">
+      <h2 class="mb8" style="font-size:16px">将来のAPI設定（認証対応を見越した準備）</h2>
+      <div class="grid-2 mb12">
+        <div class="field">
+          <label for="apiEndpoint">APIエンドポイント（例：GASの読み出し用URL）</label>
+          <input type="text" id="apiEndpoint" placeholder="https://script.google.com/.../exec" />
+        </div>
+        <div class="field">
+          <label for="apiToken">認証トークン（例：Bearerトークン）</label>
+          <input type="text" id="apiToken" placeholder="例：長いAPIトークン" />
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="btn" id="saveApiBtn">設定を保存</button>
+        <span class="muted" id="apiSaveStatus" aria-live="polite"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="mb8" style="font-size:16px">データ入力</h2>
+      <div class="mb8">1) 共有リンク/JSONを1行につき1件で貼り付け</div>
+      <textarea id="pasteBox" placeholder="例：\nhttps://.../index.html#data=...\n{\"meta\":...,\"identity\":...,\"items\":...}"></textarea>
+      <div class="flex mb8">
+        <label class="btn" for="jsonFiles">JSONファイルを選択</label>
+        <input type="file" id="jsonFiles" accept="application/json" multiple style="display:none" />
+        <button class="btn primary" id="parseBtn">読み込んで表示</button>
+        <button class="btn" id="clearBtn">表示をクリア</button>
+        <span class="muted" id="loadStatus" aria-live="polite"></span>
+      </div>
+      <div class="toolbar">
+        <button class="btn" id="exportCsvBtn">一覧をCSV出力</button>
+        <button class="btn" id="exportJsonBtn">一覧をJSON出力</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 class="mb8" style="font-size:16px">提出一覧</h2>
+      <div class="muted mb8" id="summary">0 件</div>
+      <div class="mb12">
+        <table id="table">
+          <thead>
+            <tr>
+              <th>氏名</th>
+              <th>ID</th>
+              <th>クラス</th>
+              <th class="right">服合計</th>
+              <th class="right">総合計</th>
+              <th>傾向</th>
+              <th>失敗傾向</th>
+              <th>明細（カテゴリ:数量）</th>
+              <th>提出URL</th>
+              <th>時刻</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const STORAGE = {
+        apiEndpoint: 'admin_apiEndpoint',
+        apiToken: 'admin_apiToken',
+      };
+
+      const apiEndpointEl = document.getElementById('apiEndpoint');
+      const apiTokenEl = document.getElementById('apiToken');
+      const apiSaveBtn = document.getElementById('saveApiBtn');
+      const apiSaveStatus = document.getElementById('apiSaveStatus');
+
+      const pasteBox = document.getElementById('pasteBox');
+      const jsonFiles = document.getElementById('jsonFiles');
+      const parseBtn = document.getElementById('parseBtn');
+      const clearBtn = document.getElementById('clearBtn');
+      const loadStatus = document.getElementById('loadStatus');
+
+      const exportCsvBtn = document.getElementById('exportCsvBtn');
+      const exportJsonBtn = document.getElementById('exportJsonBtn');
+
+      const tableBody = document.querySelector('#table tbody');
+      const summaryEl = document.getElementById('summary');
+
+      function saveApiSettings(){
+        try {
+          localStorage.setItem(STORAGE.apiEndpoint, apiEndpointEl.value || '');
+          localStorage.setItem(STORAGE.apiToken, apiTokenEl.value || '');
+          apiSaveStatus.textContent = '保存しました';
+          setTimeout(()=> apiSaveStatus.textContent = '', 1500);
+        } catch(e) {}
+      }
+
+      function loadApiSettings(){
+        try {
+          apiEndpointEl.value = localStorage.getItem(STORAGE.apiEndpoint) || '';
+          apiTokenEl.value = localStorage.getItem(STORAGE.apiToken) || '';
+        } catch(e) {}
+      }
+
+      apiSaveBtn.addEventListener('click', saveApiSettings);
+      loadApiSettings();
+
+      // Data model in memory
+      /** @type {Array<any>} */
+      let submissions = [];
+
+      function parseHashUrl(url){
+        try {
+          const u = new URL(url);
+          const h = u.hash || '';
+          if (!h.startsWith('#data=')) return null;
+          const b64 = h.slice(6);
+          const json = decodeURIComponent(escape(atob(b64)));
+          const obj = JSON.parse(json);
+          // 補足: 提出URLとして元URLを保持
+          obj.meta = obj.meta || {};
+          obj.meta.sourceUrl = url;
+          return obj;
+        } catch(e){ return null; }
+      }
+
+      function normalize(obj){
+        const identity = obj.identity || {};
+        const totals = obj.totals || {};
+        const notes = obj.notes || {};
+        const meta = obj.meta || {};
+        const items = Array.isArray(obj.items) ? obj.items : [];
+        const timestamp = meta.timestamp || new Date().toISOString();
+        const sourceUrl = meta.sourceUrl || meta.url || '';
+        return {
+          name: identity.name || '',
+          studentId: identity.studentId || '',
+          className: identity.className || '',
+          clothes: Number(totals.clothes || 0),
+          grand: Number(totals.grand || 0),
+          traits: notes.traits || '',
+          failures: notes.failures || '',
+          items,
+          url: sourceUrl,
+          time: timestamp
+        };
+      }
+
+      function render(){
+        tableBody.innerHTML = '';
+        submissions.forEach(s => {
+          const tr = document.createElement('tr');
+          const itemsText = s.items.map(it => `${(it.label||'').replace(/[\s\u3000]/g,'').replace(/[【】]/g,'')}:${it.qty}`).join(' / ');
+          tr.innerHTML = `
+            <td>${escapeHtml(s.name)}</td>
+            <td>${escapeHtml(s.studentId)}</td>
+            <td>${escapeHtml(s.className)}</td>
+            <td class="right">${s.clothes}</td>
+            <td class="right">${s.grand}</td>
+            <td>${escapeHtml(s.traits)}</td>
+            <td>${escapeHtml(s.failures)}</td>
+            <td>${escapeHtml(itemsText)}</td>
+            <td>${s.url ? `<a href="${escapeAttr(s.url)}" target="_blank" rel="noopener">リンク</a>` : ''}</td>
+            <td><span class="pill">${escapeHtml(new Date(s.time).toLocaleString())}</span></td>
+          `;
+          tableBody.appendChild(tr);
+        });
+        summaryEl.textContent = `${submissions.length} 件 / 合計（grand）：${sumBy(submissions,'grand')} ／ 服合計：${sumBy(submissions,'clothes')}`;
+      }
+
+      function sumBy(arr, key){ return arr.reduce((a,b)=> a + Number(b[key]||0), 0); }
+      function escapeHtml(s){ return String(s).replace(/[&<>"]/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m])); }
+      function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+
+      function addSubmission(obj){ submissions.push(normalize(obj)); }
+
+      function handlePasteLines(text){
+        const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+        let ok=0, ng=0;
+        for(const line of lines){
+          if (line.startsWith('http')){
+            const parsed = parseHashUrl(line);
+            if (parsed) { addSubmission(parsed); ok++; } else { ng++; }
+          } else {
+            try { const obj = JSON.parse(line); addSubmission(obj); ok++; } catch(e){ ng++; }
+          }
+        }
+        loadStatus.textContent = `${ok}件 読み込み / 失敗 ${ng}件`;
+        render();
+      }
+
+      function handleFiles(files){
+        if (!files || !files.length) return;
+        let done = 0; let ok = 0; let ng = 0;
+        Array.from(files).forEach(f => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            try { const obj = JSON.parse(String(reader.result||'{}')); addSubmission(obj); ok++; }
+            catch(e){ ng++; }
+            finally { done++; if (done === files.length){ loadStatus.textContent = `${ok}件 読み込み / 失敗 ${ng}件`; render(); } }
+          };
+          reader.readAsText(f);
+        });
+      }
+
+      function toCSV(){
+        const header = ['name','studentId','className','clothes','grand','traits','failures','time','url','itemsJson'];
+        const lines = [header.join(',')];
+        for(const s of submissions){
+          const esc = v => '"' + String(v).replace(/"/g,'""') + '"';
+          lines.push([
+            esc(s.name), esc(s.studentId), esc(s.className), s.clothes, s.grand,
+            esc(s.traits), esc(s.failures), esc(s.time), esc(s.url), esc(JSON.stringify(s.items))
+          ].join(','));
+        }
+        return lines.join('\n');
+      }
+
+      function download(name, content, type='application/octet-stream'){
+        const blob = new Blob([content], {type});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name; a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      parseBtn.addEventListener('click', ()=> handlePasteLines(pasteBox.value));
+      clearBtn.addEventListener('click', ()=>{ submissions = []; tableBody.innerHTML=''; summaryEl.textContent='0 件'; loadStatus.textContent=''; });
+      jsonFiles.addEventListener('change', e => { handleFiles(e.target.files); e.target.value=''; });
+      exportCsvBtn.addEventListener('click', ()=> download(`packing-submissions-${Date.now()}.csv`, toCSV(), 'text/csv;charset=utf-8'));
+      exportJsonBtn.addEventListener('click', ()=> download(`packing-submissions-${Date.now()}.json`, JSON.stringify(submissions, null, 2), 'application/json'));
+
+      // 未来のAPI読込（雛形）
+      async function fetchFromApi(){
+        const endpoint = apiEndpointEl.value.trim();
+        if (!endpoint) return;
+        try {
+          loadStatus.textContent = 'APIから取得中...';
+          const headers = { 'Accept':'application/json' };
+          const token = apiTokenEl.value.trim();
+          if (token) headers['Authorization'] = 'Bearer ' + token;
+          const res = await fetch(endpoint, { headers, mode:'cors' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const data = await res.json();
+          // 期待: data が配列 or {items: []}
+          const arr = Array.isArray(data) ? data : (Array.isArray(data.items)? data.items : []);
+          let ok=0; for(const obj of arr){ try { addSubmission(obj); ok++; } catch(e){} }
+          loadStatus.textContent = `APIから ${ok} 件 取得`;
+          render();
+        } catch(e){
+          loadStatus.textContent = 'API取得に失敗しました（設定・CORS確認）';
+        }
+      }
+
+      // 設定保存時にAPI取得のトリガも可能
+      // apiSaveBtn.addEventListener('click', fetchFromApi);
+    })();
+  </script>
+</body>
+</html>
