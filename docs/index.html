@@ -144,36 +144,20 @@
     <h1>持ち物管理アプリ用リスト</h1>
     <div class="subtle">数値を入力すると自動で合計が計算されます。</div>
 
-    <div class="toolbar">
-      <button class="btn primary" id="exportJsonBtn">JSONエクスポート</button>
-      <button class="btn" id="exportCsvBtn">CSVエクスポート</button>
-      <label class="btn" for="importJsonInput">JSONインポート</label>
-      <input type="file" id="importJsonInput" accept="application/json" style="display:none" />
-      <button class="btn" id="shareLinkBtn">共有リンク生成</button>
-      <button class="btn danger" id="clearBtn">保存データをクリア</button>
-    </div>
+    <!-- 受講生向けのため、エクスポート/インポート等の操作は非表示にしました -->
 
-    <div class="section-title">提出情報</div>
+    <div class="section-title">受講生情報</div>
     <div class="grid-2" style="margin-bottom:10px;">
       <div class="field">
-        <label for="studentName">氏名</label>
-        <input type="text" id="studentName" data-key="studentName" placeholder="例：山田 太郎" />
+        <label for="birthdate8">生年月日（8桁, 例: 20050109）</label>
+        <input type="text" id="birthdate8" data-key="birthdate8" inputmode="numeric" pattern="\\d{8}" placeholder="YYYYMMDD" />
       </div>
-      <div class="field">
-        <label for="studentId">受講生ID</label>
-        <input type="text" id="studentId" data-key="studentId" placeholder="例：A-001" />
-      </div>
-    </div>
-    <div class="grid-2" style="margin-bottom:10px;">
       <div class="field">
         <label for="studentClass">クラス</label>
         <input type="text" id="studentClass" data-key="studentClass" placeholder="例：第5期 平日クラス" />
       </div>
-      <div class="field">
-        <label for="submitEndpoint">提出先URL（管理者が配布/GASのWebアプリURL）</label>
-        <input type="text" id="submitEndpoint" data-key="submitEndpoint" placeholder="https://script.google.com/.../exec" />
-      </div>
     </div>
+    <!-- 提出先URLの入力は不要（管理側設定から自動取得） -->
     <div class="toolbar" style="justify-content:flex-end;">
       <button class="btn primary" id="submitBtn">提出（送信）</button>
       <span id="submitStatus" class="subtle" aria-live="polite"></span>
@@ -366,13 +350,11 @@
       const clothesTotalEl = document.getElementById('clothesTotal');
       const grandTotalEl = document.getElementById('grandTotal');
 
-      const exportJsonBtn = document.getElementById('exportJsonBtn');
-      const exportCsvBtn = document.getElementById('exportCsvBtn');
-      const importJsonInput = document.getElementById('importJsonInput');
-      const shareLinkBtn = document.getElementById('shareLinkBtn');
-      const clearBtn = document.getElementById('clearBtn');
       const submitBtn = document.getElementById('submitBtn');
       const submitStatus = document.getElementById('submitStatus');
+      // 管理者が admin.html で保存した提出先URL（学生側は編集不可）
+      const ADMIN_SUBMIT_ENDPOINT_KEY = 'admin_submit_endpoint';
+      const SUBMIT_ENDPOINT_DEFAULT = '';
 
       function toInt(val) {
         const n = parseInt(val, 10);
@@ -429,72 +411,6 @@
         URL.revokeObjectURL(url);
       }
 
-      function exportJSON() {
-        const state = getState();
-        const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
-        download(`packing-list-${ts}.json`, JSON.stringify(state, null, 2), 'application/json');
-      }
-
-      function rowsToCSV() {
-        const rows = Array.from(document.querySelectorAll('.row'));
-        const header = ['カテゴリ', '数量', '単位'];
-        const lines = [header.join(',')];
-        rows.forEach(r => {
-          const label = (r.querySelector('.label')?.textContent || '').replace(/[\s\u3000]/g,'').replace(/[【】]/g,'');
-          const unit = (r.querySelector('.unit')?.textContent || '').trim();
-          const input = r.querySelector('input[type="number"]');
-          const qty = input ? toInt(input.value) : 0;
-          const esc = (s) => '"' + String(s).replace(/"/g,'""') + '"';
-          lines.push([esc(label), qty, esc(unit)].join(','));
-        });
-        // 追記: テキストエリアも最後に出力
-        const traits = textareas.find(t=>t.dataset.key==='traits')?.value || '';
-        const failures = textareas.find(t=>t.dataset.key==='failures')?.value || '';
-        lines.push('');
-        lines.push('"持ち物の傾向・価値観リスト"');
-        lines.push('"' + traits.replace(/"/g,'""') + '"');
-        lines.push('');
-        lines.push('"失敗したモノの傾向リスト"');
-        lines.push('"' + failures.replace(/"/g,'""') + '"');
-        return lines.join('\n');
-      }
-
-      function exportCSV() {
-        const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
-        download(`packing-list-${ts}.csv`, rowsToCSV(), 'text/csv;charset=utf-8');
-      }
-
-      function importJSONFile(file) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          try {
-            const obj = JSON.parse(String(reader.result || '{}'));
-            setState(obj);
-            save();
-            alert('インポートしました');
-          } catch (e) {
-            alert('JSONの読み込みに失敗しました');
-          }
-        };
-        reader.readAsText(file);
-      }
-
-      function clearStorage() {
-        localStorage.removeItem(STORAGE_KEY);
-        // 値をゼロ/空に戻す
-        numberInputs.forEach(el => { el.value = 0; });
-        textareas.forEach(el => { el.value = ''; });
-        updateTotals();
-      }
-
-      function encodeStateToHash(state) {
-        try {
-          const json = JSON.stringify(state);
-          const b64 = btoa(unescape(encodeURIComponent(json)));
-          return '#data=' + b64;
-        } catch (e) { return ''; }
-      }
-
       function decodeStateFromHash(hash) {
         try {
           if (!hash.startsWith('#data=')) return null;
@@ -516,27 +432,7 @@
         el.addEventListener('change', onAnyChange, { passive: true });
       });
 
-      // ボタン動作
-      exportJsonBtn.addEventListener('click', exportJSON);
-      exportCsvBtn.addEventListener('click', exportCSV);
-      importJsonInput.addEventListener('change', (e) => {
-        const f = e.target.files && e.target.files[0];
-        if (f) importJSONFile(f);
-        e.target.value = '';
-      });
-      shareLinkBtn.addEventListener('click', () => {
-        const hash = encodeStateToHash(getState());
-        if (!hash) return alert('リンク生成に失敗しました');
-        const url = location.origin + location.pathname + hash;
-        navigator.clipboard?.writeText(url).then(() => {
-          alert('共有リンクをクリップボードにコピーしました');
-        }).catch(() => {
-          prompt('以下のURLをコピーしてください', url);
-        });
-      });
-      clearBtn.addEventListener('click', () => {
-        if (confirm('保存データを削除して初期化しますか？')) clearStorage();
-      });
+      // 学生向けに余分なボタンは削除済み
 
       function collectForSubmit() {
         const state = getState();
@@ -554,10 +450,9 @@
             userAgent: navigator.userAgent,
             url: location.href
           },
-            // 識別情報
+          // 受講生識別情報（生年月日8桁＋任意のクラス）
           identity: {
-            name: state.studentName || '',
-            studentId: state.studentId || '',
+            birthdate8: state.birthdate8 || '',
             className: state.studentClass || ''
           },
           totals: {
@@ -570,15 +465,18 @@
           },
           items: rows
         };
-        return { payload, endpoint: state.submitEndpoint || '' };
+        const endpoint = (localStorage.getItem(ADMIN_SUBMIT_ENDPOINT_KEY) || '').trim() || SUBMIT_ENDPOINT_DEFAULT;
+        return { payload, endpoint };
       }
 
       async function submitData() {
         submitStatus.textContent = '';
         const { payload, endpoint } = collectForSubmit();
-        if (!endpoint) { submitStatus.textContent = '提出先URLを入力してください'; return; }
-        if (!payload.identity.name && !payload.identity.studentId) {
-          submitStatus.textContent = '氏名または受講生IDを入力してください'; return;
+        if (!endpoint) { submitStatus.textContent = '現在提出を受け付けていません。管理者に確認してください。'; return; }
+        // 生年月日（8桁）のバリデーション
+        const bd = String(payload.identity.birthdate8 || '').trim();
+        if (!/^\d{8}$/.test(bd) || !isValidYyyyMmDd(bd)) {
+          submitStatus.textContent = '生年月日（8桁: YYYYMMDD）を正しく入力してください'; return;
         }
         try {
           submitBtn.disabled = true;
@@ -601,6 +499,16 @@
         }
       }
       submitBtn.addEventListener('click', submitData);
+
+      function isValidYyyyMmDd(yyyymmdd){
+        try {
+          const y = Number(yyyymmdd.slice(0,4));
+          const m = Number(yyyymmdd.slice(4,6));
+          const d = Number(yyyymmdd.slice(6,8));
+          const dt = new Date(y, m-1, d);
+          return dt.getFullYear()===y && (dt.getMonth()+1)===m && dt.getDate()===d;
+        } catch(e){ return false; }
+      }
 
       // 初期表示: URLハッシュ優先で復元、なければLocalStorageから復元
       const fromHash = decodeStateFromHash(location.hash || '');
