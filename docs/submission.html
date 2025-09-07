@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>提出詳細</title>
+  <style>
+    :root { --bg:#fafafa; --card:#fff; --text:#222; --muted:#666; --border:#e6e6e6; --accent:#0b79d0; }
+    *{ box-sizing: border-box }
+    body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans JP","Hiragino Sans","Yu Gothic",Meiryo,sans-serif; background:var(--bg); color:var(--text); }
+    .wrap{ max-width: 900px; margin: 0 auto; padding: 20px; }
+    h1{ font-size: 20px; margin: 0 0 10px; }
+    .card{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin:12px 0; }
+    .row{ display:grid; grid-template-columns: 140px 1fr; gap: 10px; padding:6px 0; border-top:1px dashed var(--border); }
+    .row:first-child{ border-top:none }
+    .key{ color:var(--muted); }
+    .pill{ display:inline-block; border:1px solid var(--border); border-radius:999px; padding:2px 8px; font-size:12px; color:var(--muted) }
+    .items table{ width:100%; border-collapse: collapse; }
+    .items th, .items td{ border-top:1px solid var(--border); padding:6px; text-align:left; vertical-align:top; }
+    .muted{ color:var(--muted); }
+    .toolbar{ display:flex; gap:8px; flex-wrap:wrap; }
+    .btn{ appearance:none; border:1px solid var(--border); background:#fff; color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px; cursor:pointer }
+    a.btn{ text-decoration: none; }
+  </style>
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>提出詳細</h1>
+
+    <div class="toolbar">
+      <a class="btn" href="admin.html">一覧へ戻る</a>
+    </div>
+
+    <div id="status" class="muted" style="margin-top:8px"></div>
+
+    <div id="detail" class="card" hidden>
+      <div class="row"><div class="key">提出者</div><div id="submitter">-</div></div>
+      <div class="row"><div class="key">時刻</div><div><span id="time" class="pill">-</span></div></div>
+      <div class="row"><div class="key">合計（服）</div><div id="clothes">-</div></div>
+      <div class="row"><div class="key">合計（総数）</div><div id="grand">-</div></div>
+      <div class="row"><div class="key">傾向</div><div id="traits">-</div></div>
+      <div class="row"><div class="key">失敗傾向</div><div id="failures">-</div></div>
+    </div>
+
+    <div id="itemsCard" class="card items" hidden>
+      <h2 style="font-size:16px; margin:0 0 8px">アイテム明細</h2>
+      <table>
+        <thead><tr><th>カテゴリ</th><th>数量</th><th>アイテム名</th></tr></thead>
+        <tbody id="itemsBody"></tbody>
+      </table>
+    </div>
+
+    <div class="toolbar">
+      <button id="downloadJson" class="btn">この提出をJSONで保存</button>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    const API_BASE = (window.APP_CONFIG && window.APP_CONFIG.API_BASE)
+      ? String(window.APP_CONFIG.API_BASE).replace(/\/+$/, '')
+      : '';
+    const statusEl = document.getElementById('status');
+    const detail = document.getElementById('detail');
+    const itemsCard = document.getElementById('itemsCard');
+    // Try to get id from query (?id=...) first, fallback to path parsing
+    const params = new URLSearchParams(location.search);
+    let id = params.get('id') || '';
+    if (!id) {
+      const parts = location.pathname.split('/').filter(Boolean);
+      id = parts[parts.length-2] === 'submissions' ? parts[parts.length-1] : (parts[parts.length-2] || '');
+    }
+
+    async function load(){
+      try{
+        statusEl.textContent = '読み込み中...';
+        const endpoint = API_BASE ? `${API_BASE}/admin/submissions/${encodeURIComponent(id)}` : `/admin/submissions/${encodeURIComponent(id)}`;
+        const isCross = /^https?:\/\//i.test(endpoint) && (!location.origin || !endpoint.startsWith(location.origin));
+        const res = await fetch(endpoint, { credentials: isCross ? 'include' : 'same-origin', mode: isCross ? 'cors' : 'same-origin' });
+        if (res.status === 401){
+          statusEl.textContent = 'ログインが必要です。リダイレクトします...';
+          const loginBase = API_BASE || '';
+          setTimeout(()=> location.href = `${loginBase}/auth/login?next=${encodeURIComponent(location.href)}`, 600);
+          return;
+        }
+        if (!res.ok) throw new Error('HTTP '+res.status);
+        const data = await res.json();
+        render(data);
+        statusEl.textContent = '';
+      }catch(e){
+        statusEl.textContent = '読み込みに失敗しました。';
+      }
+    }
+
+    function render(obj){
+      try{
+        const body = obj && obj.payload ? obj.payload : obj;
+        const identity = body.identity || {};
+        const totals = body.totals || {};
+        const notes = body.notes || {};
+        const items = Array.isArray(body.items) ? body.items : [];
+
+        // submitter
+        const submitter = (obj.user_name || obj.user_email || obj.user_sub || identity.name || '').trim();
+        document.getElementById('submitter').textContent = submitter || '-';
+        document.getElementById('time').textContent = new Date(obj.created_at || Date.now()).toLocaleString();
+        document.getElementById('clothes').textContent = Number(totals.clothes || 0);
+        document.getElementById('grand').textContent = Number(totals.grand || 0);
+        document.getElementById('traits').textContent = String(notes.traits || '-')
+        document.getElementById('failures').textContent = String(notes.failures || '-')
+        detail.hidden = false;
+
+        const tbody = document.getElementById('itemsBody');
+        tbody.innerHTML = '';
+        for (const it of items){
+          const tr = document.createElement('tr');
+          const names = Array.isArray(it.names) ? it.names.join('\n') : '';
+          tr.innerHTML = `<td>${escapeHtml(it.label||'')}</td><td>${Number(it.qty||0)}</td><td><pre style="margin:0; white-space:pre-wrap;">${escapeHtml(names)}</pre></td>`;
+          tbody.appendChild(tr);
+        }
+        itemsCard.hidden = false;
+
+        document.getElementById('downloadJson').onclick = ()=>{
+          const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `submission-${obj.id}.json`; a.click();
+          URL.revokeObjectURL(url);
+        };
+      }catch(e){
+        statusEl.textContent = '表示に失敗しました。';
+      }
+    }
+
+    function escapeHtml(s){ return String(s).replace(/[&<>"]/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m])); }
+
+    load();
+  })();
+  </script>
+</body>
+</html>

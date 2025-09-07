@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>管理ビューア（Packing List）</title>
+  <style>
+    :root {
+      --bg: #fafafa; --card:#fff; --text:#222; --muted:#666; --border:#e6e6e6; --accent:#0b79d0;
+    }
+    *{ box-sizing:border-box }
+    body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans JP","Hiragino Sans","Yu Gothic",Meiryo,sans-serif; background:var(--bg); color:var(--text);}
+    .wrap{ max-width:1100px; margin:0 auto; padding:20px; }
+    h1{ font-size:20px; margin:0 0 10px }
+    .card{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin:12px 0; }
+    .grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .field{ display:flex; flex-direction:column; gap:6px; }
+    .field label{ color:var(--muted); font-size:12px }
+    input[type="text"], textarea{ width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; font-size:14px; background:#fff }
+    textarea{ min-height:120px; resize:vertical }
+    .toolbar{ display:flex; flex-wrap:wrap; gap:8px; }
+    .btn{ appearance:none; border:1px solid var(--border); background:#fff; color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px; cursor:pointer }
+    .btn.primary{ border-color:var(--accent); color:var(--accent) }
+    .btn.danger{ border-color:#d00b0b; color:#d00b0b }
+    .muted{ color:var(--muted); font-size:12px }
+    table{ width:100%; border-collapse:collapse; }
+    th, td{ border-top:1px solid var(--border); padding:8px; text-align:left; vertical-align:top; }
+    th{ background:#f5f8fb }
+    .pill{ display:inline-block; border:1px solid var(--border); border-radius:999px; padding:2px 8px; font-size:12px; color:var(--muted) }
+    .flex{ display:flex; gap:8px; align-items:center }
+    .right{ text-align:right }
+    .mb8{ margin-bottom:8px }
+    .mb12{ margin-bottom:12px }
+    .mb4{ margin-bottom:4px }
+  </style>
+  <script src="config.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>管理ビューア（Packing List）</h1>
+
+    <!-- 設定セクションは削除しました -->
+
+    <div class="card">
+      <h2 class="mb8" style="font-size:16px">提出一覧</h2>
+      <div class="muted mb8" id="summary">0 件</div>
+      <div class="mb12">
+        <table id="table">
+          <thead>
+            <tr>
+              <th>提出者</th>
+              <th>提出URL</th>
+              <th>時刻</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="toolbar">
+        <button class="btn" id="exportCsvBtn">一覧をCSV出力</button>
+        <button class="btn" id="exportJsonBtn">一覧をJSON出力</button>
+        <span class="muted" id="loadStatus" aria-live="polite" style="margin-left:8px"></span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const API_BASE = (window.APP_CONFIG && window.APP_CONFIG.API_BASE)
+        ? String(window.APP_CONFIG.API_BASE).replace(/\/+$/, '')
+        : '';
+      // 設定項目は削除。並び替えは固定で latest にします。
+      const sortByEl = { value: 'latest' };
+      const loadStatus = document.getElementById('loadStatus');
+
+      const exportCsvBtn = document.getElementById('exportCsvBtn');
+      const exportJsonBtn = document.getElementById('exportJsonBtn');
+
+      const tableBody = document.querySelector('#table tbody');
+      const summaryEl = document.getElementById('summary');
+
+      // 自動取得するためボタンは不要
+
+      // Data model in memory
+      /** @type {Array<any>} */
+      let submissions = [];
+
+      function normalize(obj){
+        // /admin/submissions 形式 {id, created_at, payload, user_*} を優先的に解釈
+        const body = obj && obj.payload ? obj.payload : obj;
+        const identity = body.identity || {};
+        const totals = body.totals || {};
+        const notes = body.notes || {};
+        const meta = body.meta || {};
+        const items = Array.isArray(body.items) ? body.items : [];
+        const timestamp = obj.created_at || meta.timestamp || new Date().toISOString();
+        let sourceUrl = meta.sourceUrl || meta.url || '';
+        // Fallback: if URLが空なら学生画面トップにリンク
+        if (!sourceUrl) sourceUrl = '/student/';
+        const submitter = (obj.user_name || obj.user_email || obj.user_sub || '').trim();
+        return {
+          id: obj.id || '',
+          name: identity.name || '',
+          birthdate8: identity.birthdate8 || '',
+          className: identity.className || '',
+          clothes: Number(totals.clothes || 0),
+          grand: Number(totals.grand || 0),
+          traits: notes.traits || '',
+          failures: notes.failures || '',
+          items,
+          url: sourceUrl,
+          time: timestamp,
+          submitter
+        };
+      }
+
+      function render(){
+        tableBody.innerHTML = '';
+        const sorted = sortSubmissions([...submissions], sortByEl.value || 'latest');
+        sorted.forEach(s => {
+          const tr = document.createElement('tr');
+          const jst = new Intl.DateTimeFormat('ja-JP', { year:'numeric', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false, timeZone:'Asia/Tokyo' }).format(new Date(s.time));
+          const detailUrl = `submission.html?id=${encodeURIComponent(s.id)}`;
+          tr.innerHTML = `
+            <td>${escapeHtml(s.submitter || '')}</td>
+            <td><a href="${escapeAttr(detailUrl)}">詳細</a></td>
+            <td><span class="pill">${escapeHtml(jst)}</span></td>
+          `;
+          tableBody.appendChild(tr);
+        });
+        summaryEl.textContent = `${submissions.length} 件`;
+      }
+
+      function sumBy(arr, key){ return arr.reduce((a,b)=> a + Number(b[key]||0), 0); }
+      function escapeHtml(s){ return String(s).replace(/[&<>"]/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[m])); }
+      function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+
+      function addSubmission(obj){ submissions.push(normalize(obj)); }
+
+      function sortSubmissions(arr, how){
+        if (how === 'birthdate'){
+          return arr.sort((a,b)=> String(a.birthdate8||'').localeCompare(String(b.birthdate8||'')) );
+        } else if (how === 'class'){
+          return arr.sort((a,b)=> String(a.className||'').localeCompare(String(b.className||'')) );
+        } else if (how === 'name'){
+          return arr.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||'')) );
+        }
+        // latest
+        return arr.sort((a,b)=> new Date(b.time).getTime() - new Date(a.time).getTime());
+      }
+
+      function toCSV(){
+        const header = ['time','url'];
+        const lines = [header.join(',')];
+        for(const s of submissions){
+          const esc = v => '"' + String(v).replace(/"/g,'""') + '"';
+          lines.push([
+            esc(s.time), esc(s.url)
+          ].join(','));
+        }
+        return lines.join('\n');
+      }
+
+      function download(name, content, type='application/octet-stream'){
+        const blob = new Blob([content], {type});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name; a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      exportCsvBtn.addEventListener('click', ()=> download(`packing-submissions-${Date.now()}.csv`, toCSV(), 'text/csv;charset=utf-8'));
+      exportJsonBtn.addEventListener('click', ()=> download(`packing-submissions-${Date.now()}.json`, JSON.stringify(submissions, null, 2), 'application/json'));
+      // 並び替えは固定のためリスナー不要（以前のSTORAGE参照は削除）
+
+      // 未来のAPI読込（雛形）
+      async function fetchFromApi(force=false){
+        const endpoint = API_BASE ? (API_BASE + '/admin/submissions') : '/admin/submissions';
+        try {
+          loadStatus.textContent = 'APIから取得中...';
+          const headers = { 'Accept':'application/json' };
+          const isCross = /^https?:\/\//i.test(endpoint) && (!location.origin || !endpoint.startsWith(location.origin));
+          const res = await fetch(endpoint, { headers, mode: isCross ? 'cors' : 'same-origin', credentials: isCross ? 'include' : 'same-origin' });
+          if (res.status === 401) {
+            loadStatus.textContent = 'ログインが必要です。ログインページへ移動します...';
+            const loginBase = API_BASE || '';
+            setTimeout(()=>{ location.href = `${loginBase}/auth/login?next=${encodeURIComponent(location.href)}`; }, 600);
+            return;
+          }
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const data = await res.json();
+          // 期待: data が配列 (/admin/submissions)
+          const arr = Array.isArray(data) ? data : (Array.isArray(data.items)? data.items : []);
+          submissions = [];
+          let ok=0; for(const obj of arr){ try { addSubmission(obj); ok++; } catch(e){} }
+          loadStatus.textContent = `APIから ${ok} 件 取得（${new Date().toLocaleString()}）`;
+          render();
+        } catch(e){
+          loadStatus.textContent = 'API取得に失敗しました（設定・CORS確認）';
+        }
+      }
+
+      // 初回自動取得
+      fetchFromApi();
+    })();
+  </script>
+</body>
+</html>
