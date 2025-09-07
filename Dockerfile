@@ -22,6 +22,6 @@ COPY app ./app
 # Expose the port Render/Cloud will map
 EXPOSE 10000
 
-# Start server (Render sets PORT, but we default to 10000)
+# Start server (Render sets PORT, default to 10000 for local builds)
 ENV PORT=10000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["/bin/sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
