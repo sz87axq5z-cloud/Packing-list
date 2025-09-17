@@ -58,19 +58,7 @@ except Exception:
 # --- Middleware: Guard /student paths behind login ---
 class StudentGuardMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if path.startswith("/student"):
-            # Access session via scope to avoid assertion when not yet populated
-            scope_session = request.scope.get("session")
-            user = scope_session.get("user") if isinstance(scope_session, dict) else None
-            logging.getLogger(__name__).info("[guard] path=%s user_present=%s", path, bool(user))
-            if not user:
-                next_param = request.url.path
-                if request.url.query:
-                    next_param += f"?{request.url.query}"
-                # Use a relative path to avoid needing router in the ASGI scope here
-                logging.getLogger(__name__).info("[guard] redirect -> /auth/login?next=%s", next_param)
-                return RedirectResponse(url=f"/auth/login?next={next_param}", status_code=302)
+        # Authentication disabled: always allow access
         return await call_next(request)
 
 # Add guard first, then add SessionMiddleware so Session runs first (outermost)
@@ -142,23 +130,13 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def get_current_user(request: Request) -> UserInfo | None:
-    """Return the currently logged-in user info from the session, if any."""
-    user = request.session.get("user")
-    if not user:
-        return None
-    try:
-        return UserInfo(**user)
-    except Exception:
-        return None
+    """Authentication disabled: always return None (anonymous)."""
+    return None
 
 
 def require_login(request: Request) -> UserInfo:
-    user = get_current_user(request)
-    if not user:
-        # Redirect to login if accessed from browser; otherwise error
-        # For API usage, we raise 401.
-        raise HTTPException(status_code=401, detail="authentication required")
-    return user
+    # Authentication disabled
+    return UserInfo(sub="anonymous")
 
 
  
@@ -177,9 +155,6 @@ def admin_page():
 
 @app.get("/admin/submissions/{subm_id}", response_model=SubmissionWithUserOut)
 def admin_get_submission(subm_id: str, request: Request, db: Session = Depends(get_db)):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="not logged in")
     subm = db.get(Submission, subm_id)
     if not subm:
         raise HTTPException(status_code=404, detail="not found")
@@ -335,24 +310,9 @@ def get_student(student_id: str, db: Session = Depends(get_db)):
 # --- Submission endpoints (require login) ---
 @app.post("/submissions", response_model=SubmissionOut)
 def create_submission(payload: SubmissionIn, request: Request, db: Session = Depends(get_db)):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="not logged in")
+    # Anonymous submissions allowed
     sid = generate_student_id()
-    subm = Submission(id=sid, google_sub=user.sub, payload=payload.payload)
-    # If the student provided a name, store it onto the User record for admin visibility
-    try:
-        provided_name = None
-        if isinstance(payload.payload, dict):
-            ident = payload.payload.get("identity") or {}
-            provided_name = (ident.get("name") or "").strip()
-        if provided_name:
-            u = db.get(User, user.sub)
-            if u:
-                u.name = provided_name
-                db.add(u)
-    except Exception:
-        pass
+    subm = Submission(id=sid, google_sub=None, payload=payload.payload)
     db.add(subm)
     db.commit()
     db.refresh(subm)
@@ -361,20 +321,20 @@ def create_submission(payload: SubmissionIn, request: Request, db: Session = Dep
 
 @app.get("/submissions", response_model=list[SubmissionOut])
 def list_submissions(request: Request, db: Session = Depends(get_db)):
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="not logged in")
-    rows = db.query(Submission).filter(Submission.google_sub == user.sub).order_by(Submission.created_at.desc()).all()
+    # Public: show recent submissions (latest 50)
+    rows = (
+        db.query(Submission)
+        .order_by(Submission.created_at.desc())
+        .limit(50)
+        .all()
+    )
     return [SubmissionOut(id=r.id, created_at=iso_utc(r.created_at), payload=r.payload) for r in rows]
 
 
 # Admin: list all submissions with minimal user info
 @app.get("/admin/submissions", response_model=list[SubmissionWithUserOut])
 def admin_list_submissions(request: Request, db: Session = Depends(get_db)):
-    # Require login (you can extend to admin-only later)
-    user = get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="not logged in")
+    # Public admin list (no login)
     q = (
         db.query(Submission, User)
         .join(User, Submission.google_sub == User.google_sub, isouter=True)

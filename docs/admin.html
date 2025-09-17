@@ -182,9 +182,7 @@
           const isCross = /^https?:\/\//i.test(endpoint) && (!location.origin || !endpoint.startsWith(location.origin));
           const res = await fetch(endpoint, { headers, mode: isCross ? 'cors' : 'same-origin', credentials: isCross ? 'include' : 'same-origin' });
           if (res.status === 401) {
-            loadStatus.textContent = 'ログインが必要です。ログインページへ移動します...';
-            const loginBase = API_BASE || '';
-            setTimeout(()=>{ location.href = `${loginBase}/auth/login?next=${encodeURIComponent(location.href)}`; }, 600);
+            loadStatus.textContent = '取得できませんでした（権限エラー）。時間をおいて再読み込みしてください。';
             return;
           }
           if (!res.ok) throw new Error('HTTP ' + res.status);

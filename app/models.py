@@ -59,6 +59,6 @@ class Submission(Base):
     __tablename__ = "submissions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    google_sub: Mapped[str] = mapped_column(String(64), ForeignKey("users.google_sub"), index=True, nullable=False)
+    google_sub: Mapped[Optional[str]] = mapped_column(String(64), ForeignKey("users.google_sub"), index=True, nullable=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

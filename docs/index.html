@@ -546,10 +546,7 @@
             body: JSON.stringify({ payload })
           });
           if (res.status === 401) {
-            submitStatus.textContent = 'ログインが必要です。ログインページへ移動します...';
-            const loginBase = API_BASE || '';
-            const nextPath = '/student/';
-            setTimeout(() => { location.href = `${loginBase}/auth/login?next=${encodeURIComponent(nextPath)}`; }, 600);
+            submitStatus.textContent = '送信できませんでした（権限エラー）。時間をおいて再試行してください。';
             return;
           }
           if (!res.ok) throw new Error('HTTP ' + res.status);
